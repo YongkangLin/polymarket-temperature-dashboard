@@ -62,6 +62,7 @@ function render() {
   if (!event) return;
   const rows = eventSeries(event);
   const timezone = cityForEvent(event)?.timezone;
+  const xDomain = eventTimeDomain(event);
   document.querySelector("#generatedAt").textContent = `Generated ${formatGeneratedTime(state.data.generatedAt)}`;
   renderSummary(event, rows);
   renderSources();
@@ -72,6 +73,7 @@ function render() {
     rows,
     lineKey: "polymarketLine",
     timezone,
+    xDomain,
     emptyMessage: "No Polymarket price history available yet",
   });
   drawMultiLineChart({
@@ -79,6 +81,7 @@ function render() {
     rows,
     lineKey: "modelLine",
     timezone,
+    xDomain,
     emptyMessage: "No model trace available yet",
   });
   renderTable(event, rows);
@@ -98,6 +101,14 @@ function selectedEvent() {
 
 function cityForEvent(event) {
   return state.data.cities.find((item) => item.key === event.cityKey);
+}
+
+function eventTimeDomain(event) {
+  if (!Array.isArray(event.climateDayUtc) || event.climateDayUtc.length < 2) return null;
+  const start = new Date(event.climateDayUtc[0]).getTime();
+  const end = new Date(event.climateDayUtc[1]).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return [start, end];
 }
 
 function eventSeries(event) {
@@ -124,8 +135,8 @@ function eventSeries(event) {
 
 function normalizeLine(points) {
   return (points || [])
-    .map((point) => ({ t: point.t, p: Number(point.p) }))
-    .filter((point) => point.t && Number.isFinite(point.p));
+    .map((point) => ({ t: point.t, p: Number(point.p), ms: new Date(point.t).getTime() }))
+    .filter((point) => point.t && Number.isFinite(point.p) && Number.isFinite(point.ms));
 }
 
 function renderSummary(event, rows) {
@@ -187,7 +198,7 @@ function renderBracketLegend(selector, rows, source) {
     .join("");
 }
 
-function drawMultiLineChart({ selector, rows, lineKey, timezone, emptyMessage }) {
+function drawMultiLineChart({ selector, rows, lineKey, timezone, xDomain, emptyMessage }) {
   const svg = document.querySelector(selector);
   svg.innerHTML = "";
   const width = svg.clientWidth || 900;
@@ -196,16 +207,19 @@ function drawMultiLineChart({ selector, rows, lineKey, timezone, emptyMessage })
   const margin = { top: 18, right: 18, bottom: 34, left: 46 };
   const innerW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;
-  const allPoints = rows.flatMap((row) => row[lineKey]).filter((point) => Number.isFinite(point.p));
-  if (!allPoints.length) {
+  const domain = xDomain || dataTimeDomain(rows, lineKey);
+  if (!domain) {
     text(svg, width / 2, height / 2, emptyMessage, "empty", "middle");
     return;
   }
 
-  const times = allPoints.map((point) => new Date(point.t).getTime()).filter(Number.isFinite);
-  const minX = Math.min(...times);
-  const maxX = Math.max(...times);
-  const x = (time) => margin.left + ((new Date(time).getTime() - minX) / Math.max(maxX - minX, 1)) * innerW;
+  const [minX, maxX] = domain;
+  const visibleRows = rows.map((row) => ({
+    ...row,
+    visibleLine: row[lineKey].filter((point) => point.ms >= minX && point.ms <= maxX),
+  }));
+  const allPoints = visibleRows.flatMap((row) => row.visibleLine);
+  const x = (time) => margin.left + ((time - minX) / Math.max(maxX - minX, 1)) * innerW;
   const y = (value) => margin.top + (1 - value) * innerH;
 
   for (let i = 0; i <= 4; i += 1) {
@@ -216,14 +230,29 @@ function drawMultiLineChart({ selector, rows, lineKey, timezone, emptyMessage })
   line(svg, margin.left, margin.top, margin.left, height - margin.bottom, "axis");
   line(svg, margin.left, height - margin.bottom, width - margin.right, height - margin.bottom, "axis");
 
-  for (const tick of timeTicks(minX, maxX, 5)) {
-    text(svg, margin.left + ((tick - minX) / Math.max(maxX - minX, 1)) * innerW, height - 10, shortTraceTime(tick, timezone), "tick", "middle");
+  const ticks = timeTicks(minX, maxX, 5);
+  ticks.forEach((tick, index) => {
+    const anchor = index === 0 ? "start" : index === ticks.length - 1 ? "end" : "middle";
+    text(svg, margin.left + ((tick - minX) / Math.max(maxX - minX, 1)) * innerW, height - 10, shortTraceTime(tick, timezone), "tick", anchor);
+  });
+
+  if (!allPoints.length) {
+    text(svg, width / 2, height / 2, emptyMessage, "empty", "middle");
+    return;
   }
 
-  for (const row of rows) {
-    const tracePath = pathFor(row[lineKey], x, y);
+  for (const row of visibleRows) {
+    const tracePath = pathFor(row.visibleLine, x, y);
     if (tracePath) path(svg, tracePath, row.color, "line", row.label);
   }
+}
+
+function dataTimeDomain(rows, lineKey) {
+  const times = rows.flatMap((row) => row[lineKey]).map((point) => point.ms).filter(Number.isFinite);
+  if (!times.length) return null;
+  const start = Math.min(...times);
+  const end = Math.max(...times);
+  return end > start ? [start, end] : [start, start + 1];
 }
 
 function timeTicks(minX, maxX, count) {
@@ -240,7 +269,7 @@ function pathFor(points, x, y) {
       open = false;
       continue;
     }
-    parts.push(`${open ? "L" : "M"}${x(point.t).toFixed(2)},${y(point.p).toFixed(2)}`);
+    parts.push(`${open ? "L" : "M"}${x(point.ms).toFixed(2)},${y(point.p).toFixed(2)}`);
     open = true;
   }
   return parts.join(" ");
@@ -320,6 +349,8 @@ function shortTraceTime(value, timezone) {
   if (!Number.isFinite(date.getTime())) return "NA";
   return new Intl.DateTimeFormat(undefined, {
     timeZone: timezone,
+    month: "short",
+    day: "numeric",
     hour: "numeric",
     minute: "2-digit",
   }).format(date);

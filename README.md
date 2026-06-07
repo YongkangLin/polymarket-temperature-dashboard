@@ -11,7 +11,8 @@ Static GitHub Pages dashboard for five Polymarket temperature markets:
 Each event includes the full bracket set listed on Polymarket. The dashboard has
 city and date selectors. The Polymarket chart shows every bracket price line for
 the selected event, and the model chart shows the same bracket set using model
-YES probabilities.
+YES probabilities. Chart x-axes are fixed to the selected station's official
+NWS climate-day window.
 
 The site is static. Regenerate `assets/data.json` from the private modeling repo,
 then push this folder as a public GitHub Pages repository.
