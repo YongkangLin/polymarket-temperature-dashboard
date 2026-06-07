@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Polymarket Temperature Tracker</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Polymarket Temperature Tracker</h1>
+        <p id="subtitle">Station-level model replay and live probability traces</p>
+      </div>
+      <div class="stamp" id="generatedAt">Loading data</div>
+    </header>
+
+    <main>
+      <section class="controls" aria-label="Market selector">
+        <label>
+          City
+          <select id="citySelect"></select>
+        </label>
+        <label>
+          Date
+          <select id="dateSelect"></select>
+        </label>
+      </section>
+
+      <section class="summary" id="summary"></section>
+
+      <section class="chart-panel">
+        <div class="chart-head">
+          <h2>Temperature Trace</h2>
+          <div class="legend" id="tempLegend"></div>
+        </div>
+        <svg id="tempChart" role="img" aria-label="Temperature time series"></svg>
+      </section>
+
+      <section class="chart-panel">
+        <div class="chart-head">
+          <h2>YES Probability</h2>
+          <div class="legend" id="probLegend"></div>
+        </div>
+        <svg id="probChart" role="img" aria-label="Polymarket YES probability time series"></svg>
+      </section>
+
+      <section class="table-panel">
+        <div class="chart-head">
+          <h2>Latest Updates</h2>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Observed</th>
+                <th>High So Far</th>
+                <th>Model Final</th>
+                <th>YES</th>
+                <th>Wind</th>
+              </tr>
+            </thead>
+            <tbody id="updatesBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Unofficial research dashboard. Settlement source is the NWS Climatological Report (Daily).</span>
+      <span id="sourceLinks"></span>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
