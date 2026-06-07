@@ -22,9 +22,9 @@ async function boot() {
   const response = await fetch("assets/data.json", { cache: "no-store" });
   if (!response.ok) throw new Error(`Failed to load data: ${response.status}`);
   state.data = await response.json();
-  const firstEvent = state.data.events[0];
-  state.cityKey = firstEvent?.cityKey;
-  state.date = firstEvent?.date;
+  const firstCity = state.data.cities.find((city) => eventsForCity(city.key).length);
+  state.cityKey = firstCity?.key || state.data.events[0]?.cityKey;
+  state.date = preferredDateForCity(state.cityKey);
   renderSelectors();
   render();
 }
@@ -41,14 +41,16 @@ function renderSelectors() {
   citySelect.value = state.cityKey;
   citySelect.onchange = () => {
     state.cityKey = citySelect.value;
-    state.date = datesForCity(state.cityKey)[0];
+    state.date = preferredDateForCity(state.cityKey);
     renderSelectors();
     render();
   };
 
   dateSelect.innerHTML = "";
   for (const date of datesForCity(state.cityKey)) {
-    dateSelect.append(new Option(date, date));
+    const event = eventsForCity(state.cityKey).find((item) => item.date === date);
+    const suffix = Number.isFinite(event?.actualTmaxF) ? ` · official ${temp(event.actualTmaxF)}` : " · pending";
+    dateSelect.append(new Option(`${date}${suffix}`, date));
   }
   dateSelect.value = state.date;
   dateSelect.onchange = () => {
@@ -92,7 +94,17 @@ function eventsForCity(cityKey) {
 }
 
 function datesForCity(cityKey) {
-  return eventsForCity(cityKey).map((event) => event.date).sort();
+  return eventsForCity(cityKey)
+    .map((event) => event.date)
+    .sort()
+    .reverse();
+}
+
+function preferredDateForCity(cityKey) {
+  const events = eventsForCity(cityKey)
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date));
+  return events.find((event) => Number.isFinite(event.actualTmaxF))?.date || events[0]?.date;
 }
 
 function selectedEvent() {
