@@ -25,34 +25,39 @@
           Date
           <select id="dateSelect"></select>
         </label>
-        <label>
-          Bet Bracket
-          <select id="bracketSelect"></select>
-        </label>
       </section>
 
       <section class="summary" id="summary"></section>
 
       <section class="chart-panel">
         <div class="chart-head">
-          <h2>Polymarket vs Model</h2>
-          <div class="legend" id="probLegend"></div>
+          <h2>Polymarket Prices</h2>
+          <div class="legend" id="marketLegend"></div>
         </div>
-        <svg id="probChart" role="img" aria-label="Polymarket YES probability time series"></svg>
+        <svg id="marketChart" role="img" aria-label="Polymarket YES price time series for all brackets"></svg>
+      </section>
+
+      <section class="chart-panel">
+        <div class="chart-head">
+          <h2>Our Model Probabilities</h2>
+          <div class="legend" id="modelLegend"></div>
+        </div>
+        <svg id="modelChart" role="img" aria-label="Model YES probability time series for all brackets"></svg>
       </section>
 
       <section class="table-panel">
         <div class="chart-head">
-          <h2>Latest Updates</h2>
+          <h2>Latest Bracket Snapshot</h2>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Time</th>
+                <th>Bracket</th>
                 <th>Polymarket</th>
                 <th>Model</th>
                 <th>Model Edge</th>
+                <th>Result</th>
               </tr>
             </thead>
             <tbody id="updatesBody"></tbody>
@@ -66,6 +71,6 @@
       <span id="sourceLinks"></span>
     </footer>
 
-    <script src="app.js?v=brackets-v1"></script>
+    <script src="app.js?v=event-wide-v1"></script>
   </body>
 </html>

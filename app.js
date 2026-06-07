@@ -2,13 +2,21 @@ const state = {
   data: null,
   cityKey: null,
   date: null,
-  marketSlug: null,
 };
 
-const colors = {
-  polymarket: "#2563eb",
-  model: "#0f766e",
-};
+const bracketColors = [
+  "#2563eb",
+  "#0f766e",
+  "#b45309",
+  "#7c3aed",
+  "#dc2626",
+  "#0891b2",
+  "#ca8a04",
+  "#16a34a",
+  "#db2777",
+  "#475569",
+  "#ea580c",
+];
 
 async function boot() {
   const response = await fetch("assets/data.json", { cache: "no-store" });
@@ -17,7 +25,6 @@ async function boot() {
   const firstEvent = state.data.events[0];
   state.cityKey = firstEvent?.cityKey;
   state.date = firstEvent?.date;
-  state.marketSlug = firstEvent?.brackets[0]?.marketSlug;
   renderSelectors();
   render();
 }
@@ -25,7 +32,6 @@ async function boot() {
 function renderSelectors() {
   const citySelect = document.querySelector("#citySelect");
   const dateSelect = document.querySelector("#dateSelect");
-  const bracketSelect = document.querySelector("#bracketSelect");
 
   citySelect.innerHTML = "";
   for (const city of state.data.cities) {
@@ -36,7 +42,6 @@ function renderSelectors() {
   citySelect.onchange = () => {
     state.cityKey = citySelect.value;
     state.date = datesForCity(state.cityKey)[0];
-    state.marketSlug = selectedEvent()?.brackets[0]?.marketSlug;
     renderSelectors();
     render();
   };
@@ -48,35 +53,35 @@ function renderSelectors() {
   dateSelect.value = state.date;
   dateSelect.onchange = () => {
     state.date = dateSelect.value;
-    state.marketSlug = selectedEvent()?.brackets[0]?.marketSlug;
-    renderSelectors();
-    render();
-  };
-
-  bracketSelect.innerHTML = "";
-  for (const bracket of selectedEvent()?.brackets || []) {
-    bracketSelect.append(new Option(`${bracket.label} (${pct(bracket.latestPolymarketPrice)})`, bracket.marketSlug));
-  }
-  bracketSelect.value = state.marketSlug;
-  bracketSelect.onchange = () => {
-    state.marketSlug = bracketSelect.value;
     render();
   };
 }
 
 function render() {
   const event = selectedEvent();
-  const series = state.data.series[state.marketSlug];
-  if (!event || !series) return;
+  if (!event) return;
+  const rows = eventSeries(event);
+  const timezone = cityForEvent(event)?.timezone;
   document.querySelector("#generatedAt").textContent = `Generated ${formatGeneratedTime(state.data.generatedAt)}`;
-  renderSummary(event, series);
+  renderSummary(event, rows);
   renderSources();
-  renderLegend("#probLegend", [
-    ["Polymarket", colors.polymarket],
-    ["Our model", colors.model],
-  ]);
-  renderProbabilityChart(series);
-  renderTable(series);
+  renderBracketLegend("#marketLegend", rows, "market");
+  renderBracketLegend("#modelLegend", rows, "model");
+  drawMultiLineChart({
+    selector: "#marketChart",
+    rows,
+    lineKey: "polymarketLine",
+    timezone,
+    emptyMessage: "No Polymarket price history available yet",
+  });
+  drawMultiLineChart({
+    selector: "#modelChart",
+    rows,
+    lineKey: "modelLine",
+    timezone,
+    emptyMessage: "No model trace available yet",
+  });
+  renderTable(event, rows);
 }
 
 function eventsForCity(cityKey) {
@@ -91,18 +96,50 @@ function selectedEvent() {
   return state.data.events.find((event) => event.cityKey === state.cityKey && event.date === state.date);
 }
 
-function renderSummary(event, series) {
-  const city = state.data.cities.find((item) => item.key === event.cityKey);
-  const latestMarket = latestValue(series.polymarketLine);
-  const latestModel = latestValue(series.modelLine);
-  const edge = Number.isFinite(latestModel) && Number.isFinite(latestMarket) ? latestModel - latestMarket : null;
-  const resolved = series.resolvedYes === null ? "Pending" : series.resolvedYes ? "YES" : "NO";
+function cityForEvent(event) {
+  return state.data.cities.find((item) => item.key === event.cityKey);
+}
+
+function eventSeries(event) {
+  return (event.brackets || []).map((bracket, index) => {
+    const series = state.data.series[bracket.marketSlug] || {};
+    const polymarketLine = normalizeLine(series.polymarketLine);
+    const modelLine = normalizeLine(series.modelLine);
+    const market = latestValue(polymarketLine) ?? bracket.latestPolymarketPrice ?? bracket.currentYesPrice;
+    const model = latestValue(modelLine) ?? bracket.latestModelProbability;
+    const edge = Number.isFinite(model) && Number.isFinite(market) ? model - market : null;
+    return {
+      bracket,
+      label: bracket.label,
+      color: bracketColors[index % bracketColors.length],
+      polymarketLine,
+      modelLine,
+      market,
+      model,
+      edge,
+      resolvedYes: series.resolvedYes ?? bracket.resolvedYes,
+    };
+  });
+}
+
+function normalizeLine(points) {
+  return (points || [])
+    .map((point) => ({ t: point.t, p: Number(point.p) }))
+    .filter((point) => point.t && Number.isFinite(point.p));
+}
+
+function renderSummary(event, rows) {
+  const city = cityForEvent(event);
+  const topMarket = maxBy(rows, (row) => row.market);
+  const topModel = maxBy(rows, (row) => row.model);
+  const bestEdge = maxBy(rows, (row) => row.edge);
   const metrics = [
-    ["Market", series.label, `${event.station} · ${event.date}`],
-    ["Polymarket", pct(latestMarket), "YES price"],
-    ["Our Model", pct(latestModel), "YES probability"],
-    ["Model Edge", signedPct(edge), edge == null ? "Waiting for both lines" : edge > 0 ? "Model above market" : "Model below market"],
-    ["Official High", temp(event.actualTmaxF), event.actualTmaxF == null ? "Final pending" : resolved],
+    ["Station", event.station, `${city?.name || event.city} · ${event.date}`],
+    ["Brackets", String(rows.length), bracketRange(rows)],
+    ["Top Polymarket", topMarket ? `${topMarket.label} ${pct(topMarket.market)}` : "Pending", "highest YES price"],
+    ["Top Model", topModel ? `${topModel.label} ${pct(topModel.model)}` : "Pending", "highest model probability"],
+    ["Best Edge", bestEdge ? `${bestEdge.label} ${signedPct(bestEdge.edge)}` : "Pending", "model minus market"],
+    ["Official High", temp(event.actualTmaxF), event.actualTmaxF == null ? "Final pending" : "Resolved"],
   ];
   document.querySelector("#summary").innerHTML = metrics
     .map(
@@ -117,27 +154,40 @@ function renderSummary(event, series) {
     .join("");
 }
 
+function bracketRange(rows) {
+  if (!rows.length) return "No brackets";
+  return `${rows[0].label} to ${rows[rows.length - 1].label}`;
+}
+
+function maxBy(rows, getter) {
+  let best = null;
+  let bestValue = -Infinity;
+  for (const row of rows) {
+    const value = getter(row);
+    if (Number.isFinite(value) && value > bestValue) {
+      best = row;
+      bestValue = value;
+    }
+  }
+  return best;
+}
+
 function renderSources() {
   document.querySelector("#sourceLinks").innerHTML = state.data.sources
     .map((source) => `<a href="${source.url}">${escapeHtml(source.name)}</a>`)
     .join(" · ");
 }
 
-function renderLegend(selector, items) {
-  document.querySelector(selector).innerHTML = items
-    .map(([label, color]) => `<span class="legend-item"><span class="swatch" style="background:${color}"></span>${label}</span>`)
+function renderBracketLegend(selector, rows, source) {
+  document.querySelector(selector).innerHTML = rows
+    .map((row) => {
+      const value = source === "market" ? row.market : row.model;
+      return `<span class="legend-item"><span class="swatch" style="background:${row.color}"></span>${escapeHtml(row.label)} <strong>${escapeHtml(pct(value))}</strong></span>`;
+    })
     .join("");
 }
 
-function renderProbabilityChart(series) {
-  drawProbabilityChart({
-    selector: "#probChart",
-    marketLine: series.polymarketLine,
-    modelLine: series.modelLine,
-  });
-}
-
-function drawProbabilityChart({ selector, marketLine, modelLine }) {
+function drawMultiLineChart({ selector, rows, lineKey, timezone, emptyMessage }) {
   const svg = document.querySelector(selector);
   svg.innerHTML = "";
   const width = svg.clientWidth || 900;
@@ -146,9 +196,9 @@ function drawProbabilityChart({ selector, marketLine, modelLine }) {
   const margin = { top: 18, right: 18, bottom: 34, left: 46 };
   const innerW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;
-  const allPoints = [...marketLine, ...modelLine].filter((point) => Number.isFinite(point.p));
+  const allPoints = rows.flatMap((row) => row[lineKey]).filter((point) => Number.isFinite(point.p));
   if (!allPoints.length) {
-    text(svg, width / 2, height / 2, "No market/model data available yet", "empty", "middle");
+    text(svg, width / 2, height / 2, emptyMessage, "empty", "middle");
     return;
   }
 
@@ -166,17 +216,20 @@ function drawProbabilityChart({ selector, marketLine, modelLine }) {
   line(svg, margin.left, margin.top, margin.left, height - margin.bottom, "axis");
   line(svg, margin.left, height - margin.bottom, width - margin.right, height - margin.bottom, "axis");
 
-  const tickCount = 5;
-  const sorted = allPoints.slice().sort((a, b) => new Date(a.t) - new Date(b.t));
-  for (let i = 0; i < tickCount; i += 1) {
-    const point = sorted[Math.floor((i * (sorted.length - 1)) / Math.max(tickCount - 1, 1))];
-    text(svg, x(point.t), height - 10, shortTraceTime(point.t), "tick", "middle");
+  for (const tick of timeTicks(minX, maxX, 5)) {
+    text(svg, margin.left + ((tick - minX) / Math.max(maxX - minX, 1)) * innerW, height - 10, shortTraceTime(tick, timezone), "tick", "middle");
   }
 
-  const marketPath = pathFor(marketLine, x, y);
-  if (marketPath) path(svg, marketPath, colors.polymarket, "line");
-  const modelPath = pathFor(modelLine, x, y);
-  if (modelPath) path(svg, modelPath, colors.model, "line");
+  for (const row of rows) {
+    const tracePath = pathFor(row[lineKey], x, y);
+    if (tracePath) path(svg, tracePath, row.color, "line", row.label);
+  }
+}
+
+function timeTicks(minX, maxX, count) {
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return [];
+  if (count <= 1 || minX === maxX) return [minX];
+  return Array.from({ length: count }, (_, index) => minX + ((maxX - minX) * index) / (count - 1));
 }
 
 function pathFor(points, x, y) {
@@ -193,50 +246,25 @@ function pathFor(points, x, y) {
   return parts.join(" ");
 }
 
-function renderTable(series) {
-  const rows = combinedRows(series).slice(-14).reverse();
+function renderTable(event, rows) {
   document.querySelector("#updatesBody").innerHTML = rows
     .map(
       (row) => `
         <tr>
-          <td>${escapeHtml(formatTraceTime(row.t))}</td>
+          <td><span class="swatch table-swatch" style="background:${row.color}"></span>${escapeHtml(row.label)}</td>
           <td>${escapeHtml(pct(row.market))}</td>
           <td>${escapeHtml(pct(row.model))}</td>
           <td>${escapeHtml(signedPct(row.edge))}</td>
+          <td>${escapeHtml(resolutionText(event, row))}</td>
         </tr>
       `,
     )
     .join("");
 }
 
-function combinedRows(series) {
-  const model = series.modelLine || [];
-  const market = series.polymarketLine || [];
-  return model.map((point) => {
-    const marketPoint = nearestPoint(market, point.t);
-    const marketValue = marketPoint?.p ?? null;
-    return {
-      t: point.t,
-      model: point.p,
-      market: marketValue,
-      edge: Number.isFinite(point.p) && Number.isFinite(marketValue) ? point.p - marketValue : null,
-    };
-  });
-}
-
-function nearestPoint(points, time) {
-  if (!points.length) return null;
-  const target = new Date(time).getTime();
-  let best = points[0];
-  let bestDiff = Math.abs(new Date(best.t).getTime() - target);
-  for (const point of points) {
-    const diff = Math.abs(new Date(point.t).getTime() - target);
-    if (diff < bestDiff) {
-      best = point;
-      bestDiff = diff;
-    }
-  }
-  return best;
+function resolutionText(event, row) {
+  if (event.actualTmaxF == null || row.resolvedYes == null) return "Pending";
+  return row.resolvedYes ? "YES" : "NO";
 }
 
 function latestValue(points) {
@@ -244,11 +272,16 @@ function latestValue(points) {
   return Number.isFinite(value) ? value : null;
 }
 
-function path(svg, d, stroke, className) {
+function path(svg, d, stroke, className, label) {
   const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
   node.setAttribute("d", d);
   node.setAttribute("stroke", stroke);
   node.setAttribute("class", className);
+  if (label) {
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = label;
+    node.append(title);
+  }
   svg.append(node);
 }
 
@@ -282,34 +315,14 @@ function formatGeneratedTime(value) {
   }).format(new Date(value));
 }
 
-function formatTraceTime(value) {
-  const parsed = parseIsoLocalParts(value);
-  if (!parsed) return "NA";
-  return `${parsed.month} ${parsed.day}, ${formatHour(parsed.hour, parsed.minute)}`;
-}
-
-function shortTraceTime(value) {
-  const parsed = parseIsoLocalParts(value);
-  if (!parsed) return "NA";
-  return formatHour(parsed.hour, parsed.minute);
-}
-
-function parseIsoLocalParts(value) {
-  const match = String(value).match(/^\d{4}-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-  if (!match) return null;
-  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return {
-    month: monthNames[Number(match[1]) - 1],
-    day: Number(match[2]),
-    hour: Number(match[3]),
-    minute: Number(match[4]),
-  };
-}
-
-function formatHour(hour24, minute) {
-  const suffix = hour24 >= 12 ? "PM" : "AM";
-  const hour = hour24 % 12 || 12;
-  return `${hour}:${String(minute).padStart(2, "0")} ${suffix}`;
+function shortTraceTime(value, timezone) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "NA";
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: timezone,
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function temp(value) {
