@@ -49,7 +49,7 @@ function renderSelectors() {
   dateSelect.innerHTML = "";
   for (const date of datesForCity(state.cityKey)) {
     const event = eventsForCity(state.cityKey).find((item) => item.date === date);
-    const suffix = Number.isFinite(event?.actualTmaxF) ? ` · official ${temp(event.actualTmaxF)}` : " · pending";
+    const suffix = resolutionSuffix(event);
     dateSelect.append(new Option(`${date}${suffix}`, date));
   }
   dateSelect.value = state.date;
@@ -104,7 +104,7 @@ function preferredDateForCity(cityKey) {
   const events = eventsForCity(cityKey)
     .slice()
     .sort((a, b) => b.date.localeCompare(a.date));
-  return events.find((event) => Number.isFinite(event.actualTmaxF))?.date || events[0]?.date;
+  return events.find((event) => Number.isFinite(event.actualTmaxF) || event.resolvedBracketLabel)?.date || events[0]?.date;
 }
 
 function selectedEvent() {
@@ -163,7 +163,7 @@ function renderSummary(event, rows) {
     ["Top Polymarket", topMarket ? `${topMarket.label} ${pct(topMarket.market)}` : "Pending", "highest YES price"],
     ["Top Model", topModel ? `${topModel.label} ${pct(topModel.model)}` : "Pending", "highest model probability"],
     ["Best Edge", bestEdge ? `${bestEdge.label} ${signedPct(bestEdge.edge)}` : "Pending", "model minus market"],
-    ["Official High", temp(event.actualTmaxF), event.actualTmaxF == null ? "Final pending" : "Resolved"],
+    ["Resolution", resolutionValue(event), event.resolvedBracketLabel || event.actualTmaxF != null ? "Resolved" : "Final pending"],
   ];
   document.querySelector("#summary").innerHTML = metrics
     .map(
@@ -346,7 +346,7 @@ function renderTable(event, rows) {
 }
 
 function resolutionText(event, row) {
-  if (event.actualTmaxF == null || row.resolvedYes == null) return "Pending";
+  if (row.resolvedYes == null) return "Pending";
   return row.resolvedYes ? "YES" : "NO";
 }
 
@@ -419,6 +419,18 @@ function shortTraceTime(value, timezone) {
 
 function temp(value) {
   return Number.isFinite(value) ? `${Math.round(value)}F` : "Pending";
+}
+
+function resolutionValue(event) {
+  if (Number.isFinite(event.actualTmaxF)) return temp(event.actualTmaxF);
+  if (event.resolvedBracketLabel) return event.resolvedBracketLabel;
+  return "Pending";
+}
+
+function resolutionSuffix(event) {
+  if (Number.isFinite(event?.actualTmaxF)) return ` · official ${temp(event.actualTmaxF)}`;
+  if (event?.resolvedBracketLabel) return ` · resolved ${event.resolvedBracketLabel}`;
+  return " · pending";
 }
 
 function pct(value) {
