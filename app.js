@@ -2,22 +2,22 @@ const state = {
   data: null,
   cityKey: null,
   date: null,
+  marketSlug: null,
 };
 
 const colors = {
-  observedTempF: "#2563eb",
-  highSoFarF: "#b45309",
-  modelFinalHighF: "#0f766e",
-  forecastTempF: "#64748b",
-  yesProb: "#0f766e",
+  polymarket: "#2563eb",
+  model: "#0f766e",
 };
 
 async function boot() {
   const response = await fetch("assets/data.json", { cache: "no-store" });
   if (!response.ok) throw new Error(`Failed to load data: ${response.status}`);
   state.data = await response.json();
-  state.cityKey = state.data.markets[0]?.cityKey;
-  state.date = state.data.markets[0]?.date;
+  const firstEvent = state.data.events[0];
+  state.cityKey = firstEvent?.cityKey;
+  state.date = firstEvent?.date;
+  state.marketSlug = firstEvent?.brackets[0]?.marketSlug;
   renderSelectors();
   render();
 }
@@ -25,71 +25,84 @@ async function boot() {
 function renderSelectors() {
   const citySelect = document.querySelector("#citySelect");
   const dateSelect = document.querySelector("#dateSelect");
+  const bracketSelect = document.querySelector("#bracketSelect");
+
   citySelect.innerHTML = "";
   for (const city of state.data.cities) {
-    const hasMarket = state.data.markets.some((market) => market.cityKey === city.key);
-    if (!hasMarket) continue;
+    if (!eventsForCity(city.key).length) continue;
     citySelect.append(new Option(`${city.name} (${city.station})`, city.key));
   }
   citySelect.value = state.cityKey;
-  citySelect.addEventListener("change", () => {
+  citySelect.onchange = () => {
     state.cityKey = citySelect.value;
-    const dates = marketDatesForCity(state.cityKey);
-    state.date = dates[0];
+    state.date = datesForCity(state.cityKey)[0];
+    state.marketSlug = selectedEvent()?.brackets[0]?.marketSlug;
     renderSelectors();
     render();
-  });
+  };
 
   dateSelect.innerHTML = "";
-  for (const date of marketDatesForCity(state.cityKey)) {
+  for (const date of datesForCity(state.cityKey)) {
     dateSelect.append(new Option(date, date));
   }
   dateSelect.value = state.date;
-  dateSelect.addEventListener("change", () => {
+  dateSelect.onchange = () => {
     state.date = dateSelect.value;
+    state.marketSlug = selectedEvent()?.brackets[0]?.marketSlug;
+    renderSelectors();
     render();
-  });
+  };
+
+  bracketSelect.innerHTML = "";
+  for (const bracket of selectedEvent()?.brackets || []) {
+    bracketSelect.append(new Option(`${bracket.label} (${pct(bracket.latestPolymarketPrice)})`, bracket.marketSlug));
+  }
+  bracketSelect.value = state.marketSlug;
+  bracketSelect.onchange = () => {
+    state.marketSlug = bracketSelect.value;
+    render();
+  };
 }
 
 function render() {
-  const market = selectedMarket();
-  const series = state.data.series[market.key];
+  const event = selectedEvent();
+  const series = state.data.series[state.marketSlug];
+  if (!event || !series) return;
   document.querySelector("#generatedAt").textContent = `Generated ${formatGeneratedTime(state.data.generatedAt)}`;
-  renderSummary(market, series);
+  renderSummary(event, series);
   renderSources();
-  renderLegend("#tempLegend", [
-    ["Observed", colors.observedTempF],
-    ["High so far", colors.highSoFarF],
-    ["Model final high", colors.modelFinalHighF],
-    ["Forecast temp", colors.forecastTempF],
+  renderLegend("#probLegend", [
+    ["Polymarket", colors.polymarket],
+    ["Our model", colors.model],
   ]);
-  renderLegend("#probLegend", [["YES probability", colors.yesProb]]);
-  renderTempChart(series);
   renderProbabilityChart(series);
   renderTable(series);
 }
 
-function selectedMarket() {
-  return state.data.markets.find((market) => market.cityKey === state.cityKey && market.date === state.date);
+function eventsForCity(cityKey) {
+  return state.data.events.filter((event) => event.cityKey === cityKey);
 }
 
-function marketDatesForCity(cityKey) {
-  return state.data.markets
-    .filter((market) => market.cityKey === cityKey)
-    .map((market) => market.date)
-    .sort();
+function datesForCity(cityKey) {
+  return eventsForCity(cityKey).map((event) => event.date).sort();
 }
 
-function renderSummary(market, series) {
-  const city = state.data.cities.find((item) => item.key === market.cityKey);
-  const latest = series.points.at(-1) || {};
-  const resolved = market.resolvedYes === null ? "Pending" : market.resolvedYes ? "YES" : "NO";
+function selectedEvent() {
+  return state.data.events.find((event) => event.cityKey === state.cityKey && event.date === state.date);
+}
+
+function renderSummary(event, series) {
+  const city = state.data.cities.find((item) => item.key === event.cityKey);
+  const latestMarket = latestValue(series.polymarketLine);
+  const latestModel = latestValue(series.modelLine);
+  const edge = Number.isFinite(latestModel) && Number.isFinite(latestMarket) ? latestModel - latestMarket : null;
+  const resolved = series.resolvedYes === null ? "Pending" : series.resolvedYes ? "YES" : "NO";
   const metrics = [
-    ["Market Rule", market.rule, `${market.station} · ${market.date}`],
-    ["YES Probability", pct(latest.yesProb), series.dataMode === "forecast_only" ? "Forecast only" : "Live/replay trace"],
-    ["Model Final High", temp(latest.modelFinalHighF ?? market.basePredictedTmaxF), `Baseline forecast ${temp(market.forecastTmaxF)}`],
-    ["Observed High", temp(latest.highSoFarF), market.actualTmaxF == null ? "Official final pending" : `Official ${temp(market.actualTmaxF)} · ${resolved}`],
-    ["Station", city.station, city.notes],
+    ["Market", series.label, `${event.station} · ${event.date}`],
+    ["Polymarket", pct(latestMarket), "YES price"],
+    ["Our Model", pct(latestModel), "YES probability"],
+    ["Model Edge", signedPct(edge), edge == null ? "Waiting for both lines" : edge > 0 ? "Model above market" : "Model below market"],
+    ["Official High", temp(event.actualTmaxF), event.actualTmaxF == null ? "Final pending" : resolved],
   ];
   document.querySelector("#summary").innerHTML = metrics
     .map(
@@ -116,29 +129,15 @@ function renderLegend(selector, items) {
     .join("");
 }
 
-function renderTempChart(series) {
-  const market = selectedMarket();
-  drawChart({
-    selector: "#tempChart",
-    points: series.points,
-    yKeys: ["observedTempF", "highSoFarF", "modelFinalHighF", "forecastTempF"],
-    yFormat: (value) => `${Math.round(value)}F`,
-    yDomain: temperatureDomain(series.points, market),
-    rule: { low: market.lowF, high: market.highF },
-  });
-}
-
 function renderProbabilityChart(series) {
-  drawChart({
+  drawProbabilityChart({
     selector: "#probChart",
-    points: series.points,
-    yKeys: ["yesProb"],
-    yFormat: (value) => `${Math.round(value * 100)}%`,
-    yDomain: [0, 1],
+    marketLine: series.polymarketLine,
+    modelLine: series.modelLine,
   });
 }
 
-function drawChart({ selector, points, yKeys, yFormat, yDomain, rule }) {
+function drawProbabilityChart({ selector, marketLine, modelLine }) {
   const svg = document.querySelector(selector);
   svg.innerHTML = "";
   const width = svg.clientWidth || 900;
@@ -147,98 +146,102 @@ function drawChart({ selector, points, yKeys, yFormat, yDomain, rule }) {
   const margin = { top: 18, right: 18, bottom: 34, left: 46 };
   const innerW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;
-  if (!points.length) {
-    text(svg, width / 2, height / 2, "No time-series data available yet", "empty", "middle");
+  const allPoints = [...marketLine, ...modelLine].filter((point) => Number.isFinite(point.p));
+  if (!allPoints.length) {
+    text(svg, width / 2, height / 2, "No market/model data available yet", "empty", "middle");
     return;
   }
 
-  const times = points.map((point) => new Date(point.t).getTime()).filter(Number.isFinite);
+  const times = allPoints.map((point) => new Date(point.t).getTime()).filter(Number.isFinite);
   const minX = Math.min(...times);
   const maxX = Math.max(...times);
-  const [minY, maxY] = yDomain;
   const x = (time) => margin.left + ((new Date(time).getTime() - minX) / Math.max(maxX - minX, 1)) * innerW;
-  const y = (value) => margin.top + (1 - (value - minY) / Math.max(maxY - minY, 1)) * innerH;
+  const y = (value) => margin.top + (1 - value) * innerH;
 
   for (let i = 0; i <= 4; i += 1) {
     const yy = margin.top + (innerH * i) / 4;
     line(svg, margin.left, yy, width - margin.right, yy, "grid");
-    const value = maxY - ((maxY - minY) * i) / 4;
-    text(svg, 8, yy + 4, yFormat(value), "tick");
+    text(svg, 8, yy + 4, `${100 - i * 25}%`, "tick");
   }
-
-  if (rule && (rule.low != null || rule.high != null)) {
-    if (rule.low != null && rule.high != null) {
-      const top = y(rule.high + 0.5);
-      const bottom = y(rule.low - 0.5);
-      rect(svg, margin.left, top, innerW, bottom - top, "rule-band");
-    } else if (rule.high != null) {
-      line(svg, margin.left, y(rule.high + 0.5), width - margin.right, y(rule.high + 0.5), "rule-line");
-    }
-  }
-
   line(svg, margin.left, margin.top, margin.left, height - margin.bottom, "axis");
   line(svg, margin.left, height - margin.bottom, width - margin.right, height - margin.bottom, "axis");
 
-  const tickCount = Math.min(5, points.length);
+  const tickCount = 5;
+  const sorted = allPoints.slice().sort((a, b) => new Date(a.t) - new Date(b.t));
   for (let i = 0; i < tickCount; i += 1) {
-    const point = points[Math.floor((i * (points.length - 1)) / Math.max(tickCount - 1, 1))];
-    const xx = x(point.t);
-    text(svg, xx, height - 10, shortTraceTime(point.t), "tick", "middle");
+    const point = sorted[Math.floor((i * (sorted.length - 1)) / Math.max(tickCount - 1, 1))];
+    text(svg, x(point.t), height - 10, shortTraceTime(point.t), "tick", "middle");
   }
 
-  for (const key of yKeys) {
-    const pathData = pathFor(points, key, x, y);
-    if (!pathData) continue;
-    path(svg, pathData, colors[key], "line");
-  }
+  const marketPath = pathFor(marketLine, x, y);
+  if (marketPath) path(svg, marketPath, colors.polymarket, "line");
+  const modelPath = pathFor(modelLine, x, y);
+  if (modelPath) path(svg, modelPath, colors.model, "line");
 }
 
-function temperatureDomain(points, market) {
-  const values = [];
-  for (const point of points) {
-    for (const key of ["observedTempF", "highSoFarF", "modelFinalHighF", "forecastTempF"]) {
-      if (Number.isFinite(point[key])) values.push(point[key]);
-    }
-  }
-  if (market.lowF != null) values.push(market.lowF - 2);
-  if (market.highF != null) values.push(market.highF + 2);
-  if (!values.length) return [50, 100];
-  const min = Math.floor(Math.min(...values) - 2);
-  const max = Math.ceil(Math.max(...values) + 2);
-  return [min, max];
-}
-
-function pathFor(points, key, x, y) {
+function pathFor(points, x, y) {
   const parts = [];
   let open = false;
   for (const point of points) {
-    const value = point[key];
-    if (!Number.isFinite(value)) {
+    if (!Number.isFinite(point.p)) {
       open = false;
       continue;
     }
-    parts.push(`${open ? "L" : "M"}${x(point.t).toFixed(2)},${y(value).toFixed(2)}`);
+    parts.push(`${open ? "L" : "M"}${x(point.t).toFixed(2)},${y(point.p).toFixed(2)}`);
     open = true;
   }
   return parts.join(" ");
 }
 
 function renderTable(series) {
-  const rows = series.points.slice(-14).reverse();
+  const rows = combinedRows(series).slice(-14).reverse();
   document.querySelector("#updatesBody").innerHTML = rows
     .map(
-      (point) => `
+      (row) => `
         <tr>
-          <td>${escapeHtml(formatTraceTime(point.t))}</td>
-          <td>${escapeHtml(temp(point.observedTempF))}</td>
-          <td>${escapeHtml(temp(point.highSoFarF))}</td>
-          <td>${escapeHtml(temp(point.modelFinalHighF))}</td>
-          <td>${escapeHtml(pct(point.yesProb))}</td>
-          <td>${escapeHtml(wind(point))}</td>
+          <td>${escapeHtml(formatTraceTime(row.t))}</td>
+          <td>${escapeHtml(pct(row.market))}</td>
+          <td>${escapeHtml(pct(row.model))}</td>
+          <td>${escapeHtml(signedPct(row.edge))}</td>
         </tr>
       `,
     )
     .join("");
+}
+
+function combinedRows(series) {
+  const model = series.modelLine || [];
+  const market = series.polymarketLine || [];
+  return model.map((point) => {
+    const marketPoint = nearestPoint(market, point.t);
+    const marketValue = marketPoint?.p ?? null;
+    return {
+      t: point.t,
+      model: point.p,
+      market: marketValue,
+      edge: Number.isFinite(point.p) && Number.isFinite(marketValue) ? point.p - marketValue : null,
+    };
+  });
+}
+
+function nearestPoint(points, time) {
+  if (!points.length) return null;
+  const target = new Date(time).getTime();
+  let best = points[0];
+  let bestDiff = Math.abs(new Date(best.t).getTime() - target);
+  for (const point of points) {
+    const diff = Math.abs(new Date(point.t).getTime() - target);
+    if (diff < bestDiff) {
+      best = point;
+      bestDiff = diff;
+    }
+  }
+  return best;
+}
+
+function latestValue(points) {
+  const value = points?.slice().reverse().find((point) => Number.isFinite(point.p))?.p;
+  return Number.isFinite(value) ? value : null;
 }
 
 function path(svg, d, stroke, className) {
@@ -255,16 +258,6 @@ function line(svg, x1, y1, x2, y2, className) {
   node.setAttribute("y1", y1);
   node.setAttribute("x2", x2);
   node.setAttribute("y2", y2);
-  node.setAttribute("class", className);
-  svg.append(node);
-}
-
-function rect(svg, x, y, width, height, className) {
-  const node = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  node.setAttribute("x", x);
-  node.setAttribute("y", y);
-  node.setAttribute("width", width);
-  node.setAttribute("height", Math.max(height, 0));
   node.setAttribute("class", className);
   svg.append(node);
 }
@@ -327,9 +320,8 @@ function pct(value) {
   return Number.isFinite(value) ? `${Math.round(value * 100)}%` : "Pending";
 }
 
-function wind(point) {
-  if (!Number.isFinite(point.windDir) || !Number.isFinite(point.windMph)) return "NA";
-  return `${Math.round(point.windDir)} deg @ ${Math.round(point.windMph)} mph`;
+function signedPct(value) {
+  return Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${Math.round(value * 100)}%` : "Pending";
 }
 
 function escapeHtml(value) {
