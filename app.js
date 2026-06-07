@@ -63,7 +63,7 @@ function render() {
   const rows = eventSeries(event);
   const timezone = cityForEvent(event)?.timezone;
   const xDomain = eventTimeDomain(event);
-  document.querySelector("#generatedAt").textContent = `Generated ${formatGeneratedTime(state.data.generatedAt)}`;
+  document.querySelector("#generatedAt").textContent = generatedLabel();
   renderSummary(event, rows);
   renderSources();
   renderBracketLegend("#marketLegend", rows, "market");
@@ -217,7 +217,7 @@ function drawMultiLineChart({ selector, rows, lineKey, timezone, xDomain, emptyM
   const [minX, maxX] = domain;
   const visibleRows = rows.map((row) => ({
     ...row,
-    visibleLine: spanLineToDomain(row[lineKey], minX, maxX),
+    visibleLine: lineInsideDomain(row[lineKey], minX, maxX),
   }));
   const allPoints = visibleRows.flatMap((row) => row.visibleLine);
   const x = (time) => margin.left + ((time - minX) / Math.max(maxX - minX, 1)) * innerW;
@@ -248,15 +248,13 @@ function drawMultiLineChart({ selector, rows, lineKey, timezone, xDomain, emptyM
   }
 }
 
-function spanLineToDomain(points, minX, maxX) {
+function lineInsideDomain(points, minX, maxX) {
   if (!points.length) return [];
   const inDomain = points.filter((point) => point.ms >= minX && point.ms <= maxX);
   const startSource = lastAtOrBefore(points, minX) || firstAtOrAfter(points, minX);
-  const endSource = lastAtOrBefore(points, maxX) || firstAtOrAfter(points, maxX) || startSource;
   const line = [];
   if (startSource) line.push(domainPoint(minX, startSource.p));
-  line.push(...inDomain.filter((point) => point.ms > minX && point.ms < maxX));
-  if (endSource && maxX > minX) line.push(domainPoint(maxX, endSource.p));
+  line.push(...inDomain.filter((point) => point.ms > minX && point.ms <= maxX));
   return dedupeByTime(line);
 }
 
@@ -386,6 +384,13 @@ function formatGeneratedTime(value) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function generatedLabel() {
+  if (state.data.polymarketRefreshedAt) {
+    return `Polymarket ${formatGeneratedTime(state.data.polymarketRefreshedAt)} · Model ${formatGeneratedTime(state.data.modelGeneratedAt || state.data.generatedAt)}`;
+  }
+  return `Generated ${formatGeneratedTime(state.data.generatedAt)}`;
 }
 
 function shortTraceTime(value, timezone) {
