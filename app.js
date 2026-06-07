@@ -136,7 +136,8 @@ function eventSeries(event) {
 function normalizeLine(points) {
   return (points || [])
     .map((point) => ({ t: point.t, p: Number(point.p), ms: new Date(point.t).getTime() }))
-    .filter((point) => point.t && Number.isFinite(point.p) && Number.isFinite(point.ms));
+    .filter((point) => point.t && Number.isFinite(point.p) && Number.isFinite(point.ms))
+    .sort((a, b) => a.ms - b.ms);
 }
 
 function renderSummary(event, rows) {
@@ -216,7 +217,7 @@ function drawMultiLineChart({ selector, rows, lineKey, timezone, xDomain, emptyM
   const [minX, maxX] = domain;
   const visibleRows = rows.map((row) => ({
     ...row,
-    visibleLine: row[lineKey].filter((point) => point.ms >= minX && point.ms <= maxX),
+    visibleLine: spanLineToDomain(row[lineKey], minX, maxX),
   }));
   const allPoints = visibleRows.flatMap((row) => row.visibleLine);
   const x = (time) => margin.left + ((time - minX) / Math.max(maxX - minX, 1)) * innerW;
@@ -245,6 +246,49 @@ function drawMultiLineChart({ selector, rows, lineKey, timezone, xDomain, emptyM
     const tracePath = pathFor(row.visibleLine, x, y);
     if (tracePath) path(svg, tracePath, row.color, "line", row.label);
   }
+}
+
+function spanLineToDomain(points, minX, maxX) {
+  if (!points.length) return [];
+  const inDomain = points.filter((point) => point.ms >= minX && point.ms <= maxX);
+  const startSource = lastAtOrBefore(points, minX) || firstAtOrAfter(points, minX);
+  const endSource = lastAtOrBefore(points, maxX) || firstAtOrAfter(points, maxX) || startSource;
+  const line = [];
+  if (startSource) line.push(domainPoint(minX, startSource.p));
+  line.push(...inDomain.filter((point) => point.ms > minX && point.ms < maxX));
+  if (endSource && maxX > minX) line.push(domainPoint(maxX, endSource.p));
+  return dedupeByTime(line);
+}
+
+function lastAtOrBefore(points, time) {
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    if (points[index].ms <= time) return points[index];
+  }
+  return null;
+}
+
+function firstAtOrAfter(points, time) {
+  for (const point of points) {
+    if (point.ms >= time) return point;
+  }
+  return null;
+}
+
+function domainPoint(ms, p) {
+  return { t: new Date(ms).toISOString(), ms, p };
+}
+
+function dedupeByTime(points) {
+  const deduped = [];
+  for (const point of points) {
+    const last = deduped[deduped.length - 1];
+    if (last && last.ms === point.ms) {
+      deduped[deduped.length - 1] = point;
+    } else {
+      deduped.push(point);
+    }
+  }
+  return deduped;
 }
 
 function dataTimeDomain(rows, lineKey) {
